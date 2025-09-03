@@ -11,13 +11,12 @@ import {
     ActionTimelineType,
 } from "@elizaos/core";
 import {
-    type QueryTweetsResponse,
     Scraper,
-    SearchMode,
     type Tweet,
 } from "agent-twitter-client";
 import { EventEmitter } from "events";
 import type { TwitterConfig } from "./environment.ts";
+import { ConsoleLoggerDatabase, type IDatabase } from "./database.ts";
 
 export function extractAnswer(text: string): string {
     const startIndex = text.indexOf("Answer: ") + 8;
@@ -96,6 +95,7 @@ export class ClientBase extends EventEmitter {
     requestQueue: RequestQueue = new RequestQueue();
 
     profile: TwitterProfile | null;
+    database: IDatabase;
 
     async cacheTweet(tweet: Tweet): Promise<void> {
         if (!tweet) {
@@ -248,6 +248,8 @@ export class ClientBase extends EventEmitter {
             this.runtime.character.style.all.join("\n- ") +
             "- " +
             this.runtime.character.style.post.join();
+
+        this.database = new ConsoleLoggerDatabase();
     }
 
     async init() {
@@ -380,63 +382,6 @@ export class ClientBase extends EventEmitter {
         return processedTimeline;
     }
 
-    async fetchTimelineForActions(count: number): Promise<Tweet[]> {
-        elizaLogger.debug("fetching timeline for actions");
-
-        const agentUsername = this.twitterConfig.TWITTER_USERNAME;
-
-        const homeTimeline =
-            this.twitterConfig.ACTION_TIMELINE_TYPE ===
-            ActionTimelineType.Following
-                ? await this.twitterClient.fetchFollowingTimeline(count, [])
-                : await this.twitterClient.fetchHomeTimeline(count, []);
-
-        // Parse, filter out self-tweets, limit to count
-        return homeTimeline
-            .map((tweet) => this.parseTweet(tweet))
-            .filter((tweet) => tweet.username !== agentUsername) // do not perform action on self-tweets
-            .slice(0, count);
-        // TODO: Once the 'count' parameter is fixed in the 'fetchTimeline' method of the 'agent-twitter-client',
-        // this workaround can be removed.
-        // Related issue: https://github.com/elizaos/agent-twitter-client/issues/43
-    }
-
-    async fetchSearchTweets(
-        query: string,
-        maxTweets: number,
-        searchMode: SearchMode,
-        cursor?: string
-    ): Promise<QueryTweetsResponse> {
-        try {
-            // Sometimes this fails because we are rate limited. in this case, we just need to return an empty array
-            // if we dont get a response in 5 seconds, something is wrong
-            const timeoutPromise = new Promise((resolve) =>
-                setTimeout(() => resolve({ tweets: [] }), 15000)
-            );
-
-            try {
-                const result = await this.requestQueue.add(
-                    async () =>
-                        await Promise.race([
-                            this.twitterClient.fetchSearchTweets(
-                                query,
-                                maxTweets,
-                                searchMode,
-                                cursor
-                            ),
-                            timeoutPromise,
-                        ])
-                );
-                return (result ?? { tweets: [] }) as QueryTweetsResponse;
-            } catch (error) {
-                elizaLogger.error("Error fetching search tweets:", error);
-                return { tweets: [] };
-            }
-        } catch (error) {
-            elizaLogger.error("Error fetching search tweets:", error);
-            return { tweets: [] };
-        }
-    }
 
     private async populateTimeline() {
         elizaLogger.debug("populating timeline...");
@@ -555,6 +500,7 @@ export class ClientBase extends EventEmitter {
                         createdAt: tweet.timestamp * 1000,
                     });
 
+                    await this.database.logTweet(tweet);
                     await this.cacheTweet(tweet);
                 }
 
@@ -568,15 +514,8 @@ export class ClientBase extends EventEmitter {
         const timeline = await this.fetchHomeTimeline(cachedTimeline ? 10 : 50);
         const username = this.twitterConfig.TWITTER_USERNAME;
 
-        // Get the most recent 20 mentions and interactions
-        const mentionsAndInteractions = await this.fetchSearchTweets(
-            `@${username}`,
-            20,
-            SearchMode.Latest
-        );
-
         // Combine the timeline tweets and mentions/interactions
-        const allTweets = [...timeline, ...mentionsAndInteractions.tweets];
+        const allTweets = [...timeline];
 
         // Create a Set to store unique tweet IDs
         const tweetIdsToCheck = new Set<string>();
@@ -669,12 +608,12 @@ export class ClientBase extends EventEmitter {
                 createdAt: tweet.timestamp * 1000,
             });
 
+            await this.database.logTweet(tweet);
             await this.cacheTweet(tweet);
         }
 
         // Cache
         await this.cacheTimeline(timeline);
-        await this.cacheMentions(mentionsAndInteractions.tweets);
     }
 
     async setCookiesFromArray(cookiesArray: any[]) {
@@ -752,13 +691,6 @@ export class ClientBase extends EventEmitter {
         );
     }
 
-    async cacheMentions(mentions: Tweet[]) {
-        await this.runtime.cacheManager.set(
-            `twitter/${this.profile.username}/mentions`,
-            mentions,
-            { expires: Date.now() + 10 * 1000 }
-        );
-    }
 
     async getCachedCookies(username: string) {
         return await this.runtime.cacheManager.get<any[]>(
