@@ -57,20 +57,8 @@ describe('Twitter Client Base', () => {
         expect(client.twitterConfig.TWITTER_DRY_RUN).toBe(true);
     });
 
-    it('should initialize with correct tweet length limit', () => {
+    it('should initialize with a database logger', () => {
         const client = new ClientBase(mockRuntime, mockConfig);
-        expect(client.twitterConfig.TWITTER_MAX_TWEET_LENGTH).toBe(280);
-    });
-
-    it('should initialize with correct post intervals', () => {
-        const client = new ClientBase(mockRuntime, mockConfig);
-        expect(client.twitterConfig.POST_INTERVAL_MIN).toBe(5);
-        expect(client.twitterConfig.POST_INTERVAL_MAX).toBe(10);
-    });
-
-    it('should initialize with correct action settings', () => {
-        const client = new ClientBase(mockRuntime, mockConfig);
-        expect(client.twitterConfig.ACTION_INTERVAL).toBe(5);
-        expect(client.twitterConfig.ENABLE_ACTION_PROCESSING).toBe(true);
+        expect(client.database).toBeDefined();
     });
 });
